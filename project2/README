@@ -1,0 +1,384 @@
+CS 515: Project 2 X86Simplified Programming and Interpreter
+===========================================================
+
+In this project, you will get familiar with the X86Simplified
+programming and build an interpreter for X86Simplified. X86Simplified
+will be the target for the later projects.  This project also
+introduces more constructs in OCaml not used on Project 1.
+
+Following are the files in the project2.tar.gz distribution
+
+** assert.ml             - the assertion framework
+** gradedtests.ml        - graded test cases that we provide
+** main.ml               - the main test harness
+** x86simplified .mli    - the X86Simplified interface 
+** x86simplified.ml      - the X86Simplified instruction set implementation
+** x86interpreter.mli    - the interpreter's interface
+** providedtests.ml      - your submitted test cases (Part I) should go
+** x86interpreter.ml     - your interpreter code (Part II) should be written here
+** report.txt            - your experience report summary 
+** X86Simplified-specification.txt - X86Simplified ISA Specification
+
+
+(2) X86Simplified Interpreter
+-----------------------------
+
+X86Simplified assembly code is organized into labeled blocks of
+instructions, which might be written in concrete syntax as shown
+below for the example discussed in Lecture 3.
+
+square:
+        pushl %ebp
+        movl %esp %ebp
+        movl 8(%ebp), %eax
+        imull %eax, %eax
+        popl %ebp
+        ret       
+        
+f:
+       pushl %ebp
+       movl  %esp, %ebp
+       movl 12(%ebp), %eax
+       movl 8(%ebp), %ebx
+       subl %ebx, %eax
+       pushl %eax
+       call square
+       addl $4, %esp
+       popl %ebp
+       ret
+
+program:
+        pushl %ebp
+        movl %esp, %ebp
+        push $12
+        push $3
+        call f
+        add $8, %esp
+        popl %ebp
+        ret
+
+
+This code has three blocks, labeled program, f, and square. The code
+at labels f and square implement the following C code.
+
+int square (int x){
+  return x * x;
+}
+
+int f (int x1, int x2){
+  int z = x2 - x1;
+  return square(z);
+}
+
+int program (){
+  return f(3, 12);
+}
+
+The above code has three functions: "program", "f" and "square". The
+code in "program" calls function "f" with immediate values 3 and
+9. When you run use the X86AssemblyAST.ml described in lecture 2, you
+can obtain the assembly file, which can be compiled with the stub code
+provided to you in lecture 2.
+
+In this project you will implement an interpreter for X86Simplified
+programs, but rather than using the concrete syntax shown above, you
+will interpret programs written in an abstract syntax. For example, the
+program above represented with the X86Simplified abstract syntax is
+shown below. The main structure is a list of insn_blocks, each of
+which is just a record that has a lbl and a list of insn values.
+
+[
+  (mk_block "f" [
+    Push ebp;
+    Mov (esp, ebp);
+    Mov (stack_offset 2, eax); (* x2 *)
+    Mov (stack_offset 1, ebx); (* x1 *)
+    Sub (ebx, eax); 
+    Push (eax);
+    Call (Lbl (mk_lbl_named "square"));
+    Add (Imm 4l, esp);
+    Pop (ebp);
+    Ret;]
+ );
+ (mk_block "program" [
+     Push ebp;
+     Mov (esp, ebp);
+     Push (Imm 12l);
+     Push (Imm 3l);
+     Call (Lbl (mk_lbl_named "f"));
+     Add  (Imm 8l, esp);
+     Pop  ebp;
+     Ret;
+  ]);
+ (mk_block "square" [
+    Push ebp;
+    Mov (esp, ebp);
+    Mov (stack_offset 1, eax);
+    Imul (eax, Eax);
+    Pop ebp;
+    Ret;
+ ]);
+]
+
+As you can see, the correspondence between the abstract syntax and the
+concrete syntax is quite close. The file x86simplified.ml and its
+corresponding interface x86simplified.mli together provide the basic
+definitions for the creating and manipulating X86Simplified abstract
+syntax -- the main types you should be aware of are lbl, reg, operand,
+ccode, insn, and insn_block. Each of these corresponds pretty directly
+to a concept from the X86Simplified assembly language specification.
+Read the X86Simplified specification for details about each
+instruction.
+
+The X86Simplified specification is written from the point of view of
+actual X86 hardware. The interpreter you implement should be faithful
+to that specification, except for a few points describe below. 
+
+
+The ML-level interpreter's representation of the X86Simplified machine
+state is given by the this type:
+
+type x86_state = {
+    s_mem : int32 array;    (* 1024 32-bit words -- the heap *)
+    s_reg : int32 array;    (* 8 32-bit words -- the register file *)
+    mutable s_OF : bool;    (* overflow flag *)
+    mutable s_SF : bool;    (* sign bit flag *)
+    mutable s_ZF : bool;    (* zero flag *)
+}
+
+The memory and register files are simulated by OCaml-level (mutable)
+arrays of int32 values. The three condition flags are mutable boolean
+fields; all of the state is bundled together in a record (see IOC
+Chapter 8.1 for more about OCaml's record types). The main differences
+between the interpreter and real X86 hardware are:
+
+
+*** Heap size: 
+--------------
+
+To facilitate debugging, and to use less memory for the simulation,
+our interpreter will use only 4096 bytes (1024 32-bit words) for its
+heap size. The part of the heap simulated is the highest addressable
+memory locations -- in x86interpreter.ml these locations are represented
+as mem_top and mem_bot.
+
+You will need to complete the map_addr function found in
+x86interpreter.ml that takes an object-level X86Simplified address
+(i.e. a 32-bit address) and returns the meta-level int index into the
+"s_memory" array. See the documentation of this function in
+x86interpreter.mli.
+
+
+
+*** Code labels: 
+----------------
+
+Unlike the real X86 machine, our interpreter does not store program
+code in the main memory (i.e. the "s_memory" array). Instead, it will
+treat a list of insn_block values as the program to be executed, the
+code labels associated with those instruction blocks are the only
+legal jump (and call) targets in the interpreter. A real X86 machine
+can jump to an address calculated using arithmetic operations; doing
+so will cause the interpreter to throw an X86_segmentation_fault
+exception.  Treating labels abstractly presents a challenge for the
+interpreter -- we don't have a concrete machine address to use for EIP
+the "instruction pointer", which real machines use to keep track of
+the address of the next instruction to execute. Instead, your
+interpreter will have to simulate the instruction pointer
+somehow. Doing so is fairly straightforward in most cases, however the
+Call instruction is supposed to push a return address (derived from
+EIP) onto the program stack and Ret is supposed to pop a previously
+pushed address from the stack and jump to it. To simulate this
+behavior, your interpreter will need some auxiliary mechanism to track
+the stack of return addresses that would have been pushed by
+Call. Both Call and Ret instructions should still also manipulate the
+X86 stack pointer Esp. Push x00000000 to the stack for all Call
+instructions in place of the actual EIP.
+
+Because of this treatment of code labels and the EIP, your interpreter
+does not have to be 100% faithful to X86 semantics. In particular,
+programs that do not have well-balanced uses of Call and Ret are
+ill-defined, as are programs that make exotic use of the stack
+(e.g. ones that try to manipulate a return-address that was pushed by
+Call by manually popping it from the stack or reading it directly from
+memory). For similar reasons, in this interpreter, it is invalid to
+try to get a word stored at a label (or to attempt to perform indirect
+access using a label).
+
+** No Fall-through: 
+------------------
+
+Another consequence of this abstract treatment of
+code labels is that your interpreter cannot make any assumptions about
+how code might be laid out in memory. Consider the following assembly
+program:
+
+label1:
+      movl $1, %eax
+label2:
+      movl $2, %ebx
+
+If executed on a real X86 machine starting from label1, the machine
+will first move 1 into EAX and then fall through to the next
+instruction, which moves 2 into EBX. In your interpreter, this code
+might be represented as:
+
+[(mk_insn_block (mk_lbl_named "label1") [
+   Mov(eax, Imm 1l);
+ ]);
+(mk_insn_block (mk_lbl_named "label2") [
+   Mov(ebx, Imm 2l);
+ ]);
+]
+
+Because the labels are abstract, the order of insn_blocks could have
+been switched -- the interpreter doesn't know about the order in which
+code blocks might be laid out in memory, so it can't simulate fall
+through.
+
+
+[(mk_insn_block (mk_lbl_named "label2") [
+   Mov(ebx, Imm 2l);
+ ]);
+(mk_insn_block (mk_lbl_named "label1") [
+   Mov(eax, Imm 1l);
+ ]);
+]
+
+Instead, your interpreter should raise a X86_segmentation_fault
+exception if the program would ever need to fall through the end of an
+insn_block -- that is, both representations of the program above, if
+started at label1 would result in such an exception. We call an
+insn_block valid if the last instruction of the block is either a Ret
+or some form of jump instruction. All of the functionality tests we
+provide will use programs whose blocks are all valid. For example, the
+code for factorial given above is valid because each of its blocks
+ends in a Ret instruction. In general it is always possible to write
+programs in this form (you can always jump to the label that would
+otherwise be reached by falling through the end of a block).
+
+Tasks
+=====
+
+
+Complete the implementation of the x86interpreter.mli interface in the
+x86interpreter.ml file, some parts of which are given to you.
+
+We recommend that you do things in this order: 
+
+(1) As a warm-up, implement the map_addr function.  
+
+(2) As an exercise in condition codes, implement the condition_matches
+functions.  
+
+(3) Then implement the interpretation of operands (including
+indirect addresses), since this functionality will be needed for
+simulating instructions.  Then work on the instructions themselves,
+perhaps starting with developing a strategy for simulating Call and
+Ret. For this, you might want to implement an auxiliary function that
+takes extra state, and you might want to define extra functions that
+are mutually recursive with interpret. There is more than one way to
+implement the desired Call and Ret behavior; somehow you'll have to
+simulate their expected semantics.  
+
+Hints: 
+------
+
+We have provided several helper functions for 32- and 64-bit
+arithmetic and for getting a bit out of a 32-bit word. You might find
+them useful.  You'll probably want a function that sets the three
+condition flags after a result has been computed.  Groups of
+instructions share common behavior -- for example, all of the
+arithmetic instructions are quite similar. You probably want to factor
+out the commonality as much as you can (to keep your code clean).  You
+will probably want to develop small test cases to try out the
+functionality of your interpreter. See gradedtests.ml for some
+examples of how to set up tests that can look at the final state of
+the machine.  
+
+
+Tests
+=====
+
+We will grade this part of the assignment based on a suite of
+tests. Some of them are available for you to look at in
+gradedtests.ml, the rest of them we reserve for our own cases. We will
+also stress-test your interpreter on a number of "big" programs (see
+Part II) that we have developed and that your classmates will develop
+as part of this project.
+
+
+You can add your test cases to the test suite defined in
+providedtests.ml
+
+
+(2) X86Simplified Programming
+==============================
+
+For this part of the assignment, you will create (by hand) a
+non-trivial X86Simplified assembly program to test your interpreter's
+behavior and get some experience programming in X86Simplified. The factorial
+program supplied with the test code is an example of what we mean by
+"non-trivial" -- test cases of roughly this level of difficulty can
+earn full credit. In particular, your program should include:
+Non-trivial control flow: either nested loops, a recursive function,
+or something similarly complex At least one conditional branch.  Some
+amount of arithmetic or logic.  A test case (or test cases) that
+exercise your program and test the correctness of the interpreter's
+behavior. If your program computes a simple answer, it can return it
+in Eax and you can use the run_test harness as in the factorial
+example; for more complex programs you might want to use the st_test
+function, which lets you examine the resulting state of the
+interpreter.  Some good candidates for such programs include: simple
+sorting or searching algorithms (i.e. treat some chunk of memory as an
+array of values to be sorted), simple arithmetic algorithms such as
+gcd, recursive functions over integers or very simple data structures
+such as linked lists. If you are unsure whether the test case you'd
+like to implement is sufficient, contact one of the course staff.
+
+
+Your test should be a function of type unit -> unit that works in the
+assertion framework (as defined in assert.ml). This test should be
+supplied in providedtests.ml as the "Student-Provided Big Test for
+Part II". We will hand grade this submission (and test it against our
+own interpreter). We will also use all "correct" submitted tests to
+validate all of the other projects in the course -- the trickier your
+test is, the harder it will be for other teams to pass it!
+
+
+(3) Assignment submission
+
+Most of the instructions for this project are found as comments in the
+source files. For this project, you should primarily fill the
+x86interpreter.ml and providedtests.ml and submit your directory as
+project2.tar.gz directory.
+
+When we execute the following set of commands on a linux box, your
+submission should execute the tests. If you create the tar file in the
+wrong fashion, it may not have the correct directory structure.
+
+tar -zxvf project2.tar.gz
+cd project2
+./ocamlbuild main.native
+./main.native --test
+
+
+Instructions for creating the tar file. Lets say all your project2
+materials are in the project2 directory
+
+#ls
+project2
+
+#tar -c project2 > project2.tar
+
+#gzip project2.tar
+
+The last command should create project2.tar.gz
+
+(4) Grading
+ 
+You will get no credit if your submitted program does not compile.
+Apart from the test already given, we will run some hidden tests. Your
+points will be 50% for passing the given tests (with correctly written
+code) and 50% for the hidden tests. Your score for the given tests
+will be displayed by the test harness.

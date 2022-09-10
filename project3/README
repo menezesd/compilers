@@ -1,0 +1,406 @@
+CS 515: Project 3 A Compiler for Expressions 
+============================================
+
+
+(1) Overview
+============
+
+In this project, you will build a compiler for simple arithmetic
+expressions. Your compiler will accept source files of the form
+
+1 + 2 + X + 4 + 8
+
+and will produce an object file (by default named a.out) that, when
+linked against runtime.c and then executed with the resulting binary,
+takes a single command-line numeric argument for the value of the
+variable X and produces the resulting output:
+
+./a.out 3
+18
+
+The code your compiler generates should follow the cdecl calling
+conventions. After compilation, the source file from above should be
+functionally equivalent to this C program: 
+
+int program(int X) { return (1 + 2 + X + 4 + 32); }
+
+
+This project has three parts: (1) developing a lexer for the
+expression language, (2) a parser for the expression language, and (3)
+compiling the expressions to x86. The lexer and parser parts are
+interwined. 
+  
+(2) Building the project
+========================
+
+You can build the project using the following command:
+
+ocamlbuild -libs str -libs unix main.native
+
+
+Your compiler will produce X86 .s and .o files as well as native
+executables and .out files used during testing. By default these files
+will be generated in directories c_obj and c_bin respectively, and the
+default executable is called a.out. The main compiler accepts new
+command-line flags to change these directories from the
+default. Likewise, the -o option tells the compiler to use the given
+name for the result executable.
+
+(3) Running the Project
+=======================
+
+This project needs slightly different build configurations compared to
+the earlier projects. The main executable also supports more
+command-line flags than our previous project's did. By default main
+looks for runtime.c from the current directory.
+
+When you run on Linux (which you all should do), you should specify
+the -linux flag when running the compiler. This turns off name
+mangling, which has different conventions on Linux and Mac OS.
+
+#./main.native --help
+CIS515 main test harness 
+
+  --test run the test suite, ignoring other inputs
+  -q quiet mode -- turn off verbose output
+  -bin-path set the output path for generated executable files, default c_bin
+  -obj-path set the output path for generated .s  and .o files, default c_obj
+  -test-path set the path to the test directory
+  -lib add a library to the linked files
+  -runtime set the .c file to be used as the language runtime implementation
+  -o set the output executable's name
+  -S compile only, creating .s files from the source
+  -linux use linux-style name mangling
+  --stdin parse and interpret inputs from the command line, where X = 
+  --clean clean the output directories, removing all files
+  --show_ast print the abstract syntax tree after parsing
+  -help  Display this list of options
+  --help  Display this list of options
+
+
+# echo "X * X * X" > foo.e
+
+# ./main.native -o foo -runtime runtime.c foo.e
+Processing: foo.e
+root name: foo
+* gcc -mstackrealign -c -m32 -o c_obj/foo.o c_obj/foo.s
+* gcc -mstackrealign -m32 -o foo c_obj/foo.o runtime.c
+
+
+#./foo 4
+64
+
+
+(4) Project Detailed Description
+================================
+
+The Expressions Language
+------------------------
+
+The language accepted by your compiler is a simple collection of
+32-bit arithmetic operations. See the file ast.mli for the OCaml
+representation of the abstract syntax -- the type exp of expressions
+is defined there.  There is only one "input variable", written X,
+available for use in your expressions -- the value of X is determined
+by the command-line argument passed in to the generated executable
+when your program is run. Otherwise, the meaning of the arithmetic
+operators is mostly standard (see below).
+
+Implement an ocamllex lexer/ocamlyacc parser for integer arithmetic
+expressions. The terminal-symbol tokens processed by your lexer are
+described next.
+
+Lexing
+======
+
+The file lexer.mll has some skeleton lexing code you can use as a
+starting point. It depends on an implementation of "file ranges"
+(defined in range.ml(i)) for generating error messages. You will need
+to add lexing rules to handle the cases below. This will require
+modifying parser.mly to declare the types of any new tokens you add --
+the tokens should each take a Range.t parameter, which is used to
+print error messages. See the example of how the X token is declared
+in parser.mly.  
+
+** Whitespaces:
+--------------
+Whitespace is permitted anywhere before, between or after
+tokens. Whitespace is defined as the four characters tab '\t', space '
+', newline '\n', and carriage-return '\r'.
+
+** Numeric literals: 
+-------------------
+Numeric literals should be parsed as int32s. Use Int32.of_string to
+convert lexemes to their int32 representation. Remember that it might
+throw a Failure exception (which you should translate to a
+Lexer_error). A numeric literal may contain one or more of the ten
+decimal digits 0123456789. Negative numeric literals should be handled
+by the parser as a combination of a positive literal and the unary
+negation operator (see below).  
+
+** Non-numeric tokens:
+----------------------
+
+The non-numeric tokens usable as terminals by your parser (and their
+intended semantics) are given below: 
+
+(1) X the unique input argument (just the literal character 'X')
+
+(2) + binary signed addition 
+
+(3) - binary signed subtraction OR signed unary negation
+
+(4) * binary signed multiplication 
+
+(5) == binary equality (returns 1 or 0) 
+
+(6) << binary shift left
+
+(7)  >> binary arithmetic shift right 
+
+(8) >>> binary logical shift right 
+
+(9) != binary not-equal (returns 1 or 0) 
+
+(10) < binary signed less-than (returns 1 or 0)
+
+(11) <= binary signed less-than or equals (returns 1 or 0) 
+
+(12) > binary signed greater-than (returns 1 or 0) 
+
+(13) >= binary signed greater-than or equals (returns 1 or 0) 
+
+(14) !  unary logical not (returns 1 for a zero input, 0
+for nonzero input) 
+
+(15) ~ unary bitwise not 
+
+(16) & binary bitwise and 
+
+(17) | binary bitwise or 
+
+(18) ( left parenthesis 
+
+(19) ) right parenthesis 
+
+
+Parsing
+=======
+
+Your parser should accept strings according to the following ambiguous
+grammar, suitably disambiguated to implement the precedence of
+operations as defined in ast.ml (see the prec_of_* functions). Recall
+that higher precedence means tighter binding, that is, X + 3 * 4
+should yield the same abstract syntax tree as X + (3 * 4). Explicitly
+parenthesized expressions should be treated as though they had maximal
+precedence.  
+
+
+The output of your parser should be an abstract syntax tree built
+using the constructors in ast.mli. To get you started, we have
+implemented the trivial language E ::= X.
+
+The full (ambiguous) grammar for expressions has a single non-terminal
+(and starting nonterminal) E and rules given by:
+
+E ::= X 
+   |    numeric literal 
+   |    (E) 
+   |    E + E 
+   |    E - E 
+   |    E * E 
+   |    E == E 
+   |    E << E 
+   |    E >> E 
+   |    E >>> E 
+   |    E != E 
+   |    E < E 
+   |    E <= E 
+   |    E > E 
+   |    E >= E 
+   |    ! E 
+   |    ~ E 
+   |    - E 
+   |    E & E 
+   |    E | E
+
+
+Implement a parser for the disambiguated grammar for arithmetic
+expressions. All binary operations should be made to be left
+associative. That is, the input string 1 + 2 + 3 should produce the
+same parse tree as (1 + 2) + 3.
+
+***Hints
+--------
+
+(1) The lexer and parser are quite intertwined, so you'll have to make
+progress on both of them together before testing your code.
+
+
+(2) The main executable can parse inputs from standard input if run
+with the --stdin n switch. In this mode, the program reads lines from
+standard in, parses them and then uses the interpreter available in
+the Ast module to compute the expected answer your compiler should
+produce. Here n is an integer that is used as the value for X. For
+example, once you make some progress on the lexer and parser you
+should be able to have this kind of interaction:
+
+> ./main.native --stdin 17 
+X 
+X 
+Executable should yield: 17 
+(X + X) 
+X + X 
+Executable should yield: 34
+ 
+(3) The switch --show_ast can be used to dump the abstract syntax tree
+to the terminal when the compiler is run.
+
+
+Compiling Expressions
+======================
+
+
+You should complete the implementation of the compile_exp function in
+compiler.ml. This function takes as input a single Ast.exp expression
+and produces a single, globally visible code block whose entry point
+is given by the label created by calling Platform.decorate_cdecl
+"program". This code should follow the cdecl calling conventions, and
+behave as though implementing the C function defined as below (where
+<exp>) is the expression defined in our language:
+
+
+  int program(int X) {
+    return (<exp>);
+  }
+  
+It is easiest to generate code when you maintain certain regularity
+invariants. In this case, you might want to use the invariant "the
+code resulting from compiling an expression places its answer in Eax",
+since Eax is the "return register" for cdecl calling conventions.
+
+This strategy works fine for everything except binary operations --
+for those you need to store a temporary value. Since we don't have
+very much by way of compiler infrastructure at this point, there
+aren't too many options for storing those temporary values. For this
+project, you should store the results on the stack (and return results
+in Eax). You should only have to push new values to the stack when
+compiling an expression containing a binary operator. In that case,
+first generate code for the left-hand branch, then push the result,
+then generate code for the right-hand branch. Remember to pop the
+intermediate value when you're done with it.
+
+You can access the value at the top of the stack with the indirect
+operand (stack_offset 0l). To pop an item off the stack without being
+forced to store it somewhere, just manipulate Esp directly. Remember
+that the shift instructions put special requirements on the location
+of the shift amount; also note that you will have to generate some
+extra code for the comparison and logical negation operators, since
+they return exactly 0 or 1.
+
+If you use registers other than the callee save Eax, Ecx, and Edx for
+the computation, you must save and restore those values (our solution
+code is able to manage without using any callee save registers). You
+might also want to consider storing X (the program argument) in a
+dedicated register for easy access during the computation.
+
+Hints
+=====
+
+(1) Code generation should be a simple, recursive algorithm that processes
+the abstract syntax tree. The main code generator in our sample
+solution is 40 lines of well-laid-out code. If your code generator is
+much larger than this, you're doing something wrong -- seek help!  
+
+(2) In OCaml, it's most efficient to add to the head of a list. A good
+strategy is therefore to generate the instructions in reverse order
+and then reverse the entire list once when the code generation is
+complete and we need to construct a code block. In this case, we can
+think of the code generator as emitting instructions into an
+"instruction stream". The main code generator might look like this:
+
+
+let rec emit_exp (e:exp) (stream : insn list) : insn list = 
+ begin
+        match e with 
+        | Cint i -> Mov (Imm i, eax) :: stream 
+        | ...  
+ end
+
+
+Here, e is the expression being compiled, stream is the "stream of
+instructions" that we're emitting (represented as an insn list), and
+we "emit" an instruction by simply consing it on to the head of the
+list, as shown in the case for compiling integer literals. Following
+the invariants given above, we simply move the answer into Eax.  
+
+You are free to use this strategy, or one of your own choosing.
+
+Tests
+=====
+
+We will grade this part of the assignment based on a suite of
+tests. Some of them are available for you to look at in
+gradedtests.ml, the rest of them we reserve for our own cases. 
+
+Assignment submission
+=====================
+
+Most of the instructions for this project are found as comments in the
+source files. For this project, you should primarily fill the following files: 
+
+lexer.mll
+parser.mly
+compiler.ml
+
+
+and submit your directory as project3.tar.gz directory.
+
+When we execute the following set of commands on a linux box, your
+submission should execute the tests. If you create the tar file in the
+wrong fashion, it may not have the correct directory structure.
+
+tar -zxvf project3.tar.gz
+cd project3
+./ocamlbuild main.native
+./main.native --test
+
+
+Instructions for creating the tar file. Lets say all your project3
+materials are in the project2 directory
+
+#ls
+project3
+
+#tar -c project3 > project3.tar
+
+#gzip project3.tar
+
+The last command should create project3.tar.gz
+
+
+Grading
+=======
+ 
+You will get no credit if your submitted program does not compile.
+Apart from the test already given, we will run some hidden tests. Your
+points will be 50% for passing the given tests (with correctly written
+code) and 50% for the hidden tests. Your score for the given tests
+will be displayed by the test harness.
+
+
+Recommended Reading
+===================
+
+(1) Read the following tutorials on Ocamllex 
+
+ Ocamllex Tutorial:
+ *   http://plus.kaist.ac.kr/~shoh/ocaml/ocamllex-ocamlyacc/ocamllex-tutorial/
+ * Lexing:
+ *   http://caml.inria.fr/pub/docs/manual-ocaml/libref/Lexing.html
+
+
+(2) Read the following tutorial on Ocamlyacc
+
+  Ocamlyacc tutorial:
+  *    http://plus.kaist.ac.kr/~shoh/ocaml/ocamllex-ocamlyacc/ocamlyacc-tutorial/ocamlyacc-tutorial.html

@@ -68,7 +68,22 @@ let print_state (xs:x86_state): unit =
 (* Helper function that determines whether a given condition code
    applies in the x86 state xs. *)  
 let condition_matches (xs:x86_state) (c:X86simplified.ccode) : bool =
-failwith "unimplemented"
+  let slt = xs.s_sf <> xs.s_of in
+  let sle = slt || xs.s_zf in
+  begin match c with
+    | Sge -> not slt
+    | Sgt -> not sle
+    | Slt -> slt
+    | Sle -> sle
+    | Eq -> xs.s_zf
+    | NotEq -> not xs.s_zf
+    | Zero -> xs.s_zf
+    | NotZero -> not xs.s_zf
+end
+
+
+let reg_val (r: reg) (xs: x86_state) : int32 = xs.s_regs.(get_register_id r)
+
 
 (* Returns the bit at a given index in a 32-bit word as a boolean *)
 let get_bit bitidx n =
